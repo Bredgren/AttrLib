@@ -299,12 +299,21 @@ def createType(dest, type):
     writeHeader(dest, type)
     writeImpl(dest, type)
 
-def main(src, dest, files):
-    for f in files:
-        types = parse(src, f)
-        for t in types:
-            createType(dest, t)
+from AttrLib.parser import Parser
+from AttrLib.c_writer import CWriter
+
+def main(src_dir, dst_dir):
+    parser = Parser()
+    rep = parser.parse_dir(src_dir)
+    writer = CWriter()
+    writer.construct(rep)
+    writer.write(dst_dir)
+    # for f in files:
+    #     types = parse(src, f)
+    #     for t in types:
+    #         createType(dest, t)
 
 if __name__ == "__main__":
     import sys
-    main(sys.argv[1], sys.argv[2], sys.argv[3:])
+    main(sys.argv[1], sys.argv[2])
+    # compile src_dir dst_dir
