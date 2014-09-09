@@ -1,13 +1,42 @@
 
-import re
+import re, os
 from AttrLib.rep import Rep
+from setting import ATTR_LANGUAGE, LANGS_BY_EXT
 
 class Parser(object):
     def __init__(self):
-        pass
+        self.atr_files = []
+        self.imp_files = {}
+
+    def find_files(self, directory):
+        items = os.listdir(directory)
+        for item in items:
+            p = "{}/{}".format(directory, item)
+            if os.path.isfile(p):
+                name, ext = os.path.splitext(p)
+                if ext == ATTR_LANGUAGE.extension:
+                    self.atr_files.append(p)
+                else:
+                    if ext in LANGS_BY_EXT:
+                        if ext not in self.imp_files:
+                            self.imp_files[ext] = []
+                        self.imp_files[ext].append(p)
+            else:
+                self.find_files(p)
 
     def parse_dir(self, directory):
         print "parsing", directory
+        self.find_files(directory)
+
+        print "-"*5, "Atr files:"
+        for f in self.atr_files:
+            print f
+        print "-"*5, "Imp files:"
+        for t in self.imp_files:
+            print "type:", t
+            for f in self.imp_files[t]:
+                print "  ", f
+
         return Rep()
 
 class Mode(object):
