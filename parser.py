@@ -1,12 +1,13 @@
 
 import re, os
-from AttrLib.rep import Rep
+import AttrLib.rep as rep
 from setting import ATTR_LANGUAGE, LANGS_BY_EXT
 
 class Parser(object):
     def __init__(self):
         self.atr_files = []
         self.imp_files = {}
+        self.rep = None
 
     def find_files(self, directory):
         items = os.listdir(directory)
@@ -24,6 +25,23 @@ class Parser(object):
             else:
                 self.find_files(p)
 
+    def parse_file(self, file_name, contents):
+        line_num = 0
+        mode = NamespaceMode(self.rep.global_namespace, None)
+        for line in contents.split("\n"):
+            line_num += 1
+            if line.strip().startswith("//"):
+                continue
+            try:
+                mode = mode.parse_line(line)
+            except SyntaxError as e:
+                error = e.args[0]
+                error = "{}:{} {}".format(file_name, line_num, error)
+                raise SyntaxError(error)
+
+            if mode == None:
+                break
+
     def parse_dir(self, directory):
         print "parsing", directory
         self.find_files(directory)
@@ -37,7 +55,14 @@ class Parser(object):
             for f in self.imp_files[t]:
                 print "  ", f
 
-        return Rep()
+        self.rep = rep.Rep()
+        for f_name in self.atr_files:
+            f = open(f_name, 'r')
+            contents = f.read()
+            f.close()
+            self.parse_file(f_name, contents)
+
+        return self.rep
 
 class Mode(object):
     TAB = " " * 3
@@ -46,71 +71,78 @@ class Mode(object):
     VALUE = "[a-zA-Z0-9.]+"
     PARAM = "[a-zA-Z][a-zA-Z0-9, ]+"
     FILE = "[a-zA-Z_][a-zA-Z0-9_]*"
-    ATR_FILE = "{}.atr".format(FILE)
-    IMP_FILE = "{}.c".format(FILE)
+    ATR_FILE = "{}".format(FILE)
+    IMP_FILE = "{}".format(FILE)
 
-    def __init__(self, state, parent=None):
-        self.state = state
+    def __init__(self, parent=None):
         self.parent = parent
 
     def parse_line(self):
         raise NotImplemented()
 
-class OuterMode(Mode):
+class NamespaceMode(Mode):
+    NAMESPACE_START_RE = re.compile("^({}) : Namespace {{$".format(Mode.LABEL))
+    NAMESPACE_END_RE = re.compile("^}$")
     TYPE_START_RE = re.compile(
         "^({label})\(({param})\)( : ({label}))? {{$".format(
             label=Mode.LABEL, param=Mode.PARAM))
-    INCLUDE_RE = re.compile("^include \"({})\"$".format(Mode.ATR_FILE))
-    IMP_RE = re.compile("^imp \"({})\"$".format(Mode.IMP_FILE))
+    ENUM_START_RE = re.compile("^({}) : Enum {{$".format(Mode.LABEL))
 
-    def __init__(self, state):
-        Mode.__init__(self, state)
+    def __init__(self, namespace, parent):
+        Mode.__init__(self, parent)
+        self.namespace = namespace
 
-    def parse_impl(self, c_file):
-        c_func = re.compile(
-            "(({type}\s+({label})\s*\(.*\))\s*{{[^}}]*}})".format(
-                type=Mode.TYPE, label=Mode.LABEL))
+    def parse_line(self, line):
+        m = self.NAMESPACE_START_RE.match(line)
+        if m:
+            namespace_name = m.group(1)
+            print "found namespace:", namespace_name
+            new_namespace = rep.Namespace(namespace_name, self.namespace)
+            self.namespace.namespaces[namespace_name] = new_namespace
+            return NamespaceMode(new_namespace, self)
 
-        c_file = "{}/{}".format(self.state.src, c_file)
-        f = open(c_file, 'r')
-        contents = f.read()
-        f.close()
+        if self.NAMESPACE_END_RE.match(line):
+            return self.parent
 
-        funcs = c_func.findall(contents)
-        for func in funcs:
-            name = func[2]
-            decl = func[1]
-            body = func[0]
-            self.state.funcs[name] = Function(name, decl, body)
-
-    def parse_line(self):
-        line = self.state.line
-        line_num = self.state.line_num
-        types = self.state.types
+        m = self.ENUM_START_RE.match(line)
+        if m:
+            enum_name = m.group(1)
+            print "found enum:", enum_name
+            new_enum = rep.Enum(enum_name, self.namespace)
+            self.namespace.enums[enum_name] = new_enum
+            return EnumMode(new_enum, self)
 
         m = self.TYPE_START_RE.match(line)
         if m:
             type_name = m.group(1)
+            print "found type:", type_name
             params = m.group(2).split(", ")
             if m.group(4):
-                super_type = types[m.group(4)]
+                super_type = self.namespace.types[m.group(4)]
             else:
                 super_type = None
-            return TypeMode(self.state, self, type_name, params, super_type)
+            new_type = rep.Type(type_name, self.namespace, params, super_type)
+            self.namespace.types[type_name] = new_type
+            return TypeMode(new_type, self)
 
-        m = self.INCLUDE_RE.match(line)
-        if m:
-            print "include", m.group(1)
-            return self
+        if line:
+            print "Warning: Skipping unexpected line: {}".format(line)
 
-        m = self.IMP_RE.match(line)
-        if m:
-            print "imp", m.group(1)
-            self.parse_impl(m.group(1))
-            return self
+        return self
 
-        if line != '\n':
-            print "Unexpected line: {} - {}".format(line_num, line.strip())
+class EnumMode(Mode):
+    ENUM_END_RE = re.compile("^}$")
+
+    def __init__(self, enum, parent):
+        Mode.__init__(self, parent)
+        self.enum = enum
+
+    def parse_line(self, line):
+        if self.ENUM_END_RE.match(line):
+            return self.parent
+
+        if line:
+            print "Warning: Skipping unexpected line: {}".format(line)
 
         return self
 
@@ -123,41 +155,36 @@ class TypeMode(Mode):
             tab=Mode.TAB, label=Mode.LABEL, type=Mode.TYPE))
     REACTOR_RE = re.compile("")
 
-    def __init__(self, state, parent, type_name, type_params, super_type):
-        Mode.__init__(self, state, parent)
-        self.type = Type(type_name, type_params, super_type)
+    def __init__(self, type, parent):
+        Mode.__init__(self, parent)
+        self.type = type
 
-    def parse_line(self):
-        line = self.state.line
-        line_num = self.state.line_num
-        types = self.state.types
-
+    def parse_line(self, line):
         if self.TYPE_END_RE.match(line):
             return self.parent
 
-        if not line.startswith(Mode.TAB):
-            raise SyntaxError(
-                "Line: {} - must start with 3 spaces".format(line_num))
+        if line and not line.startswith(Mode.TAB):
+            raise SyntaxError("must start with 3 spaces")
 
-        m = self.ATTRIBUTE_RE.match(line)
-        if m:
-            attr_name = m.group(1)
-            attr_type = m.group(2)
-            attr_init = m.group(4)
-            attr = Attribute(attr_name, attr_type, attr_init)
-            self.type.attrs.append(attr)
-            return self
+        # m = self.ATTRIBUTE_RE.match(line)
+        # if m:
+        #     attr_name = m.group(1)
+        #     attr_type = m.group(2)
+        #     attr_init = m.group(4)
+        #     attr = Attribute(attr_name, attr_type, attr_init)
+        #     self.type.attrs.append(attr)
+        #     return self
 
-        m = self.FUNCTION_RE.match(line)
-        if m:
-            func_name = m.group(1)
-            func_ret_type = m.group(2)
-            if func_name in self.state.funcs:
-                self.type.funcs.append(self.state.funcs[func_name])
-            print "function: ", func_name, func_ret_type
-            return self
+        # m = self.FUNCTION_RE.match(line)
+        # if m:
+        #     func_name = m.group(1)
+        #     func_ret_type = m.group(2)
+        #     if func_name in self.state.funcs:
+        #         self.type.funcs.append(self.state.funcs[func_name])
+        #     print "function: ", func_name, func_ret_type
+        #     return self
 
-        if line != '\n':
-            print "Unexpected line: {} - {}".format(line_num, line.strip())
+        if line:
+            print "Warning: Skipping unexpected line: {}".format(line)
 
         return self
