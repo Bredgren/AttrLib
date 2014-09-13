@@ -30,8 +30,9 @@ class Parser(object):
         mode = NamespaceMode(self.rep.global_namespace, None)
         for line in contents.split("\n"):
             line_num += 1
-            if line.strip().startswith("//"):
-                continue
+            if line.find("//") > -1:
+                # Remove comments
+                line = line[0:line.find("//")].strip()
             try:
                 mode = mode.parse_line(line)
             except SyntaxError as e:
@@ -67,8 +68,9 @@ class Parser(object):
 class Mode(object):
     TAB = " " * 3
     LABEL = "[a-zA-Z_][a-zA-Z0-9_]*"
-    TYPE = "{}\*?".format(LABEL)
+    TYPE = "(?:{label}::)*{label}".format(label=LABEL)
     VALUE = "[a-zA-Z0-9.]+"
+    INT_VALUE = "[0-9]+"
     PARAM = "[a-zA-Z][a-zA-Z0-9, ]+"
     FILE = "[a-zA-Z_][a-zA-Z0-9_]*"
     ATR_FILE = "{}".format(FILE)
@@ -132,14 +134,33 @@ class NamespaceMode(Mode):
 
 class EnumMode(Mode):
     ENUM_END_RE = re.compile("^}$")
+    ENUM_ENTRY_RE = re.compile("^{tab}({label})(?: = ({int}))?$".format(
+            tab=Mode.TAB, label=Mode.LABEL, int=Mode.INT_VALUE))
 
     def __init__(self, enum, parent):
         Mode.__init__(self, parent)
         self.enum = enum
+        self.next_value = 0
 
     def parse_line(self, line):
         if self.ENUM_END_RE.match(line):
             return self.parent
+
+        if line and not line.startswith(Mode.TAB):
+            raise SyntaxError("must start with 3 spaces")
+
+        m = self.ENUM_ENTRY_RE.match(line)
+        if m:
+            enum_name = m.group(1)
+            enum_value = self.next_value
+            if m.group(2):
+                enum_value = int(m.group(2))
+                self.next_value = enum_value
+            print "found enum value:", enum_name, enum_value
+            enum_value = rep.EnumValue(enum_name, enum_value)
+            self.enum.values[enum_name] = enum_value
+            self.next_value += 1
+            return self
 
         if line:
             print "Warning: Skipping unexpected line: {}".format(line)

@@ -56,10 +56,16 @@ class Reaction(object):
         self.attr = attr
         self.handle_func = handle_func
 
-class Enum(object):
-    def __init__(self, name, values):
+class EnumValue(object):
+    def __init__(self, name, value):
         self.name = name
-        self.values = values
+        self.value = value
+
+class Enum(object):
+    def __init__(self, name, parent):
+        self.name = name
+        self.parent = parent
+        self.values = {}
 
 class Namespace(object):
     def __init__(self, name, parent=None):
